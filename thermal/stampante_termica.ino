@@ -29,13 +29,17 @@ otherwise the system won't be predictable anymore.
 #define MOTOR_STEP_PER_REVOLUTION   10U
 #define MOTOR_STEP_VERT_LINE        5U
 
-#define PRINTHEAD_NUM    14
+#define PRINTHEAD_NUM    7 //14
+#define PRINTHEAD_STEPS  25 // TODO define me pliz
+
+const uint8_t PRINTHEAD_PIN[PRINTHEAD_NUM] = { 0, 1, 2, 3, 4, 5, 6 };
 
 typedef struct
 {
-  bool printhead_power[PRINTHEAD_NUM];
+  bool print;
+  bool power[PRINTHEAD_NUM];
   bool direction;
-  uint32_t vertical_line_buffer;
+  uint16_t step;
 } t_printhead;
 
 typedef struct
@@ -52,16 +56,25 @@ typedef struct
 
 typedef struct
 {
-  bool data;
-  uint32_t data_count;
+  bool rcv_data;  /**< receiving data*/
+  uint8_t data_count; /**< current received byte */
+  uint8_t vertical_line_buffer[3];  /**< buffer */
 } t_serial;
 
 typedef struct
 {
+  bool simulation;  /**< No actual HW output; fake motor spin count etc */
+} t_settings;
+
+typedef struct
+{
   uint8_t state;
+  uint32_t cycle_time;
+  uint32_t timestamp;
   t_motor motor;
   t_printhead printhead;
   t_serial serial;
+  t_settings settings;
 } t_operational;
 
 uint32_t dbg_counter = 0;
@@ -74,21 +87,18 @@ enum
   MOTOR_REVERSE  /**< Motor runs reversed (do NOT use this normally) */
 };
 
-  enum
-  {
-    STATE_IDLE,
-    STATE_STEP,
-    STATE_GOING_HOME,
-    STATE_GOING_SX,
-    STATE_SIDE_STEP
-    
-  };
+enum
+{
+  STATE_IDLE,  /**< Do nothing; receive commands*/
+  STATE_STEP,  /**< Do a single vertical line step */
+  STATE_GOING_DX,  /**< Move printhead to the DX side */
+  STATE_GOING_SX,  /**< Move printhead to the SX side */
+  STATE_SIDE_STEP,  /**< Additional step to prepare the head in start position */
+  STATE_PRINT
+};
 
+/** Global operational variable */
 t_operational g_operational;
-
-uint32_t timestamp = 0;
-uint32_t cycle_time = 0;
-
 
 void p(char *fmt, ... )
 {
@@ -176,11 +186,30 @@ void hw_input()
 
 void hw_output()
 {
+    uint8_t i = 0;
+  
+    /* Set motor output value */
     motor_control(g_operational.motor.state);
+
+    /* Set printhead output value */
+    for (i = 0; i < PRINTHEAD_NUM; i++)
+    {
+      if (g_operational.printhead.print == true)
+      {
+        digitalWrite(PRINTHEAD_PIN[i], g_operational.printhead.power[i]);
+      }
+      else
+      {
+        digitalWrite(PRINTHEAD_PIN[i], false);
+      }
+    }
 }
 
 void hw_dbg()
 {
+  
+  /* buffer for the incoming vertical line data*/
+  uint8_t i = 0;
   dbg_counter++;
 
   if (dbg_counter > MS_TO_CYCLES(1000UL))
@@ -190,25 +219,34 @@ void hw_dbg()
 //   p("Photo DX %ld\n", g_operational.motor.photo_dx_count);
    p("PhotoDX %d\n", g_operational.motor.photo_dx);
    p("State %d\n", g_operational.state);
-   p("Cycle time %ld\n", cycle_time);
-   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer)));
-   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer) + 1));
-   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer) + 2));
+   p("Cycle time %ld\n", g_operational.cycle_time);
+//   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.power)));
+//   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer) + 1));
+//   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer) + 2));
    p("%d\n", g_operational.serial.data_count);
    dbg_counter = 0;
   }
 
   /* Serial get: debug and commands */
-         if (Serial.available() > 0) {
-                uint8_t incomingByte = Serial.read();
+    if (Serial.available() > 0) {
+      uint8_t incomingByte = Serial.read();
 
-                if (g_operational.serial.data == true)
-                {
-                    *(((uint8_t*)(&g_operational.printhead.vertical_line_buffer)) + (g_operational.serial.data_count)) = incomingByte;
-                    g_operational.serial.data_count++;
-                  if (g_operational.serial.data_count > 2)
+      if (g_operational.serial.rcv_data == true)
+      {
+//                    *(((uint8_t*)(&g_operational.printhead.vertical_line_buffer)) + (g_operational.serial.data_count)) = incomingByte;
+       g_operational.serial.vertical_line_buffer[g_operational.serial.data_count] = incomingByte;
+       g_operational.serial.data_count++;
+                  
+                  /* data received */
+       if (g_operational.serial.data_count > 2)
                   {
-                    g_operational.serial.data = false;
+                    /* stop receiving */
+                    g_operational.serial.rcv_data = false;
+                    /* transfer buffer to printhead power state array */
+                    for (i = 0; i < PRINTHEAD_NUM; i++)
+                    {
+                      g_operational.printhead.power[i] = (g_operational.serial.vertical_line_buffer[(i / 7)] >> (i % 7)) & 1;
+                    }
                   }
                 }
                 else
@@ -216,7 +254,7 @@ void hw_dbg()
                 switch(incomingByte)
                 {
                   case 'd':
-                    g_operational.state = STATE_GOING_HOME;
+                    g_operational.state = STATE_GOING_DX;
                     break;
                   case 's':
                     g_operational.state = STATE_GOING_SX;
@@ -224,9 +262,15 @@ void hw_dbg()
                   case 'l':
                     g_operational.state = STATE_STEP;
                     break;
+                  case 'p':
+                    g_operational.state = STATE_PRINT;
+                    break;
                   case 'x':
                     g_operational.serial.data_count = 0;
-                    g_operational.serial.data = true;
+                    g_operational.serial.rcv_data = true;
+                    break;
+                  case 'o':
+                    Serial.write(g_operational.state);
                     break;
                 }
                 }
@@ -249,64 +293,84 @@ bool rising_edge(bool *latch, bool input)
 
   return tmp;
 }
+
 static int state = 0;
 void app()
 {
   static uint32_t test_counter = 0;
-  /*
-  static uint16_t count = 0;
-  static uint16_t prev;
-  static bool toggle = false;
-
-  count += g_operational.motor.photo_motor_count - prev;
-  if (count > 1 && !toggle)
-  {
-    g_operational.motor.state = MOTOR_ON;
-    toggle = true;
-  }
-  else
-  {
-    toggle = false;
-    g_operational.motor.state = MOTOR_BRAKE;
-  }
-
-  prev = g_operational.motor.photo_motor_count;
-  */
-
+        static uint32_t counter = 0;
+      static uint16_t rev_count = 0;
+      static uint16_t macheoh = 0;
+  static uint32_t print_counter = 0;
   switch(g_operational.state)
   {
     case STATE_IDLE:
-      /* ready receive command here */
-      g_operational.motor.state = MOTOR_BRAKE;
+      /* doing nothing, ready to receive commands */
+      g_operational.motor.state = MOTOR_OFF;
+      g_operational.printhead.print = false;
+      break;
+    case STATE_PRINT:
+      print_counter++;
+      if (print_counter >= MS_TO_CYCLES(1))
+      {
+        g_operational.state = STATE_IDLE;
+        g_operational.printhead.print = false;
+      }
+      else
+      {
+        g_operational.printhead.print = true;
+      }
       break;
     case STATE_STEP:
       /* move forward a single step */
-      static uint16_t rev_count = 0;
-      static uint16_t macheoh = 0;
       rev_count += g_operational.motor.photo_motor_diff;
       if (rev_count > 5U)
       {
         g_operational.motor.state = MOTOR_BRAKE;
         macheoh++;
+
+        /* step movement complete, go idle */
         if (macheoh >= 100)
         {
           rev_count = 0;
           macheoh = 0;
           g_operational.state = STATE_IDLE;
+          g_operational.printhead.step++;
         }
       }
       else
       {
         g_operational.motor.state = MOTOR_ON;
       }
+
+      /* check if we are out of steps OR the photo(dx or sx) is reached */
+      if (g_operational.printhead.step > PRINTHEAD_STEPS || g_operational.motor.photo_dx == true || g_operational.motor.photo_sx == true)
+      {
+        if (g_operational.motor.photo_dx == true)
+        {
+          g_operational.state = STATE_GOING_DX;
+        }
+
+        if (g_operational.motor.photo_sx == true)
+        {
+          g_operational.state = STATE_GOING_SX;
+        }
+
+        /* reset steps */
+        g_operational.printhead.step = 0;
+      }
+      else
+      {
+        /* continue */
+      }
+
       break;
-    case STATE_GOING_HOME:
+    case STATE_GOING_DX:
       /* initial calibration - the printhead will be found at the right side (DX) */
       if (!g_operational.motor.photo_dx)
       {
         g_operational.state = STATE_SIDE_STEP;
         g_operational.motor.state = MOTOR_BRAKE;
-//        g_operational.printhead.direction = true; // i.e. read as .home = true! ;=)
       }
       else
       {
@@ -327,9 +391,8 @@ void app()
 
       break;
     case STATE_SIDE_STEP:
-      static uint32_t counter = 0;
       /* an extra movement is needed to place the head on the paper tray again */
-      if (g_operational.printhead.direction == true) // home position, wait for photo DX
+      if (g_operational.printhead.direction == true) /* DX, wait for photo-dx to go low */
       {
         if (g_operational.motor.photo_dx)
         {
@@ -349,6 +412,7 @@ void app()
       }
       else
       {
+        /* SX, wait for photo-sx go to low */
         if (g_operational.motor.photo_sx)
         {
           counter++;
@@ -370,22 +434,16 @@ void app()
     default:
       break;
   }
-  
-  test_counter++;
-  if (test_counter >= MS_TO_CYCLES(2000))
- {
-//   g_operational.state = STATE_STEP;
- } 
 }
 
 void setup()
 {
-  
+
   /* initialize data structures */
   memset(&g_operational, 0, sizeof(g_operational));
-  
+
   g_operational.state = STATE_GOING_SX;
-  
+
   hw_init();
 
 }
@@ -393,7 +451,7 @@ void setup()
 void loop()
 {
 
-  timestamp = micros();
+  g_operational.timestamp = micros();
   
   /* Application starts here */
   hw_input();
@@ -406,8 +464,8 @@ void loop()
 
   /* Application ends here */
 
-  cycle_time = micros() - timestamp;
+  g_operational.cycle_time = micros() - g_operational.timestamp;
   /* wait for the next cycle, do nothing */  
-  delayMicroseconds(CYCLE_TIME - cycle_time);
+  delayMicroseconds(CYCLE_TIME - g_operational.cycle_time);
 
 }
