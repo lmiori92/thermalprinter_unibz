@@ -30,9 +30,9 @@ otherwise the system won't be predictable anymore.
 #define MOTOR_STEP_VERT_LINE        5U
 
 #define PRINTHEAD_NUM    7 //14
-#define PRINTHEAD_STEPS  25 // TODO define me pliz
+#define PRINTHEAD_STEPS  250 // TODO define me pliz
 
-const uint8_t PRINTHEAD_PIN[PRINTHEAD_NUM] = { 0, 1, 2, 3, 4, 5, 6 };
+const uint8_t PRINTHEAD_PIN[PRINTHEAD_NUM] = { 7, 8, 2, 3, 4, 5, 6 };
 
 typedef struct
 {
@@ -149,6 +149,11 @@ void hw_init()
     pinMode(PHOTO_HEAD_L, INPUT_PULLUP);
     pinMode(PHOTO_HEAD_R, INPUT_PULLUP);
     pinMode(PHOTO_MOTOR, INPUT_PULLUP);
+    
+    for (uint8_t i = 0; i < PRINTHEAD_NUM; i++)
+    {
+      pinMode(PRINTHEAD_PIN[i], OUTPUT);
+    }
 }
 
 void hw_input()
@@ -217,13 +222,14 @@ void hw_dbg()
 //   p("Motor revolutions %ld\n", g_operational.motor.photo_motor_count);
 //   p("Photo SX %ld\n", g_operational.motor.photo_sx_count);
 //   p("Photo DX %ld\n", g_operational.motor.photo_dx_count);
-   p("PhotoDX %d\n", g_operational.motor.photo_dx);
-   p("State %d\n", g_operational.state);
-   p("Cycle time %ld\n", g_operational.cycle_time);
+//   p("PhotoDX %d\n", g_operational.motor.photo_dx);
+//   p("steps %d\n", g_operational.printhead.step);
+//   p("State %d\n", g_operational.state);
+//   p("Cycle time %ld\n", g_operational.cycle_time);
 //   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.power)));
 //   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer) + 1));
 //   p("Buffer %d\n", *((uint8_t*)(&g_operational.printhead.vertical_line_buffer) + 2));
-   p("%d\n", g_operational.serial.data_count);
+ //  p("%d\n", g_operational.serial.data_count);
    dbg_counter = 0;
   }
 
@@ -270,7 +276,8 @@ void hw_dbg()
                     g_operational.serial.rcv_data = true;
                     break;
                   case 'o':
-                    Serial.write(g_operational.state);
+//                    Serial.write(g_operational.state);
+                    p("%d", g_operational.state);
                     break;
                 }
                 }
@@ -311,7 +318,7 @@ void app()
       break;
     case STATE_PRINT:
       print_counter++;
-      if (print_counter >= MS_TO_CYCLES(1))
+      if (print_counter >= MS_TO_CYCLES(250))
       {
         g_operational.state = STATE_IDLE;
         g_operational.printhead.print = false;
@@ -330,7 +337,7 @@ void app()
         macheoh++;
 
         /* step movement complete, go idle */
-        if (macheoh >= 100)
+        if (macheoh >= 10)
         {
           rev_count = 0;
           macheoh = 0;
@@ -348,12 +355,12 @@ void app()
       {
         if (g_operational.motor.photo_dx == true)
         {
-          g_operational.state = STATE_GOING_DX;
+         // g_operational.state = STATE_GOING_DX;
         }
 
         if (g_operational.motor.photo_sx == true)
         {
-          g_operational.state = STATE_GOING_SX;
+         // g_operational.state = STATE_GOING_SX;
         }
 
         /* reset steps */
